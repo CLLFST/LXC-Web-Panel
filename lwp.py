@@ -34,6 +34,7 @@ import re
 import hashlib
 import sqlite3
 import os
+from rq import Queue, use_connection
 
 from flask import Flask, request, session, g, redirect, url_for, abort, \
     render_template, flash, jsonify
@@ -59,6 +60,18 @@ PORT = int(config.get('global', 'port'))
 # Flask app
 app = Flask(__name__)
 app.config.from_object(__name__)
+
+
+#Connection to Redis
+use_connection()
+
+#def of the Queue
+q = Queue(default_timeout=432000)
+
+#List of containers name
+
+Containers_names = []
+j = 0
 
 
 def connect_db():
@@ -673,18 +686,16 @@ def create_container():
             name = request.form['name']
             template = request.form['template']
             command = request.form['command']
+            Containers_names.append(name)
 
             if re.match('^(?!^containers$)|[a-zA-Z0-9_-]+$', name):
                 storage_method = request.form['backingstore']
 
                 if storage_method == 'default':
                     try:
-                        if lxc.create(name, template=template,
-                                      xargs=command) == 0:
-                            flash(u'Container %s created successfully!' % name,
-                                  'success')
-                        else:
-                            flash(u'Failed to create %s!' % name, 'error')
+			job = q.enqueue(lxc.create, name, template, xargs=command)
+			flash(u'Creating Container %s in progress .....!' % name)
+
                     except lxc.ContainerAlreadyExists:
                         flash(u'The Container %s is already created!' % name,
                               'error')
@@ -697,13 +708,9 @@ def create_container():
                     if re.match('^/[a-zA-Z0-9_/-]+$', directory) and \
                             directory != '':
                         try:
-                            if lxc.create(name, template=template,
-                                          storage='dir --dir %s' % directory,
-                                          xargs=command) == 0:
-                                flash(u'Container %s created successfully!'
-                                      % name, 'success')
-                            else:
-                                flash(u'Failed to create %s!' % name, 'error')
+                            job = q.enqueue(lxc.create, name, template, storage='dir --dir %s' % directory, xargs=command)
+                            flash(u'Creating Container %s in progress .....!' % name)
+
                         except lxc.ContainerAlreadyExists:
                             flash(u'The Container %s is already created!'
                                   % name, 'error')
@@ -727,13 +734,9 @@ def create_container():
                         storage_options += ' --fssize %s' % fssize
 
                     try:
-                        if lxc.create(name, template=template,
-                                      storage=storage_options,
-                                      xargs=command) == 0:
-                            flash(u'Container %s created successfully!' % name,
-                                  'success')
-                        else:
-                            flash(u'Failed to create %s!' % name, 'error')
+                        job = q.enqueue(lxc.create, name, template, storage=storage_options, xargs=command)
+			flash(u'Creating Container %s in progress .....!' % name)
+
                     except lxc.ContainerAlreadyExists:
                         flash(u'The container/logical volume %s is '
                               'already created!' % name, 'error')
@@ -861,7 +864,7 @@ def refresh_disk_host():
 
 @app.route('/_refresh_memory_<name>')
 def refresh_memory_containers(name=None):
-    if 'logged_in' in session:
+    if 'logged_in' in session:    
         if name == 'containers':
             containers_running = lxc.running()
             containers = []
@@ -877,6 +880,10 @@ def refresh_memory_containers(name=None):
 
 @app.route('/_check_version')
 def check_version():
+    if job.is_failed:
+       flash(u'Failed to create ! error')
+    else:
+       flash(u'Donne ! :)')
     if 'logged_in' in session:
         return jsonify(lwp.check_version())
 
